@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Chemistry Lab Sim: Extended Inventory</title>
+    <title>Chemistry Lab Sim: AI Powered</title>
     <style>
         body {
             margin: 0;
@@ -70,6 +70,9 @@
         #reset-btn { background-color: #e74c3c; color: white; }
         #reset-btn:hover { background-color: #c0392b; }
         
+        #suggest-btn { background-color: #8e44ad; color: white; }
+        #suggest-btn:hover { background-color: #732d91; }
+
         #instruction-box {
             background: rgba(0, 0, 0, 0.7);
             color: white;
@@ -81,6 +84,37 @@
             line-height: 1.4;
             max-height: 300px;
             overflow-y: auto;
+        }
+
+        /* AI Chat Bubble Styles */
+        #ai-bubble {
+            position: absolute;
+            bottom: 140px; /* Positioned near the boy character */
+            left: 20px;
+            max-width: 300px;
+            background: white;
+            color: #333;
+            padding: 15px;
+            border-radius: 15px;
+            border-bottom-left-radius: 0;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            font-size: 0.95rem;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            pointer-events: none;
+            z-index: 20;
+        }
+        
+        #ai-bubble.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        #ai-bubble strong {
+            color: #8e44ad;
+            display: block;
+            margin-bottom: 5px;
         }
 
         #reaction-text {
@@ -101,6 +135,17 @@
         }
 
         .show-text { opacity: 1 !important; }
+        
+        .loading-dots:after {
+            content: '.';
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60% { content: '...'; }
+            80%, 100% { content: ''; }
+        }
 
     </style>
 </head>
@@ -110,22 +155,28 @@
 
     <div id="ui-layer">
         <div id="header">
-            <h1>Advanced Chemistry Lab</h1>
-            <p>20 Elements & Compounds available</p>
+            <h1>Advanced Chemistry Lab ✨</h1>
+            <p>Powered by Gemini AI</p>
         </div>
         
         <div id="reaction-text">REACTION!</div>
+        
+        <!-- AI Response Bubble -->
+        <div id="ai-bubble">
+            <strong>Dr. Atom (AI):</strong>
+            <span id="ai-content">Hello! Let your curiosity guide u.</span>
+        </div>
 
         <div style="display:flex; justify-content: space-between; align-items: flex-end; width: 100%;">
             <div id="instruction-box">
-                <strong>Reaction Rules:</strong><br>
-                • Alkali Metals (Na, K, Li) + Water → <span style="color:#ff6b6b">Explosion</span><br>
-                • Metals (Mg, Zn, Fe, Al) + Acids → <span style="color:#4ecdc4">Bubbles (H2)</span><br>
-                • Acids + Bases → <span style="color:#dfe6e9">Steam (Neutralization)</span><br>
-                • Mercury (Hg) → Heavy Liquid<br>
-                • Try combining H2SO4 + Metals!
+                <strong>Inventory:</strong><br>
+                Metals: Na, K, Li, Mg, Ca, Fe, Zn, Cu, Al, Pb<br>
+                Liquids: H2O, HCl, H2SO4, HNO3, NaOH, KOH, Hg, CuSO4, Ethanol, NH3<br>
+                <br>
+                <em>Tip: Use the "Suggest Experiment" button to get ideas from AI!</em>
             </div>
             <div id="controls">
+                <button id="suggest-btn">✨ Suggest Experiment</button>
                 <button id="reset-btn">Clean Beaker</button>
             </div>
         </div>
@@ -138,6 +189,8 @@
         // --- CONFIG ---
         const SCENE_BG = 0x2c3e50;
         const TABLE_COLOR = 0x5D4037;
+        // PASTE YOUR GEMINI API KEY HERE
+        const apiKey = ""; 
         
         // --- GLOBALS ---
         let scene, camera, renderer, raycaster, mouse;
@@ -146,13 +199,39 @@
         let particles = [];
         let boyCharacter;
         let chemicals = []; 
-        let beakerContents = []; // Array of chemical names
+        let beakerContents = []; 
         let isReacting = false;
+        
+        // --- CUSTOM AUDIO SETUP ---
+        // INSTRUCTIONS:
+        // 1. Put your audio files in the same folder as this index.html
+        // 2. Change the filenames below (e.g., 'explosion': 'my_blast.mp3')
+        // 3. Ensure your browser allows autoplay or interact with the page first
+        const soundFiles = {
+            'explosion': 'https://www.youtube.com/watch?v=YRex1Udiybs',
+            'bubbles': 'https://actions.google.com/sounds/v1/water/bubbles.ogg',
+            'steam': 'https://actions.google.com/sounds/v1/transportation/steam_train_whistle.ogg',
+            'heavy_liquid': 'https://actions.google.com/sounds/v1/water/water_droplet.ogg'
+        };
+
+        function playSoundEffect(type) {
+            const filePath = soundFiles[type];
+            if (filePath) {
+                const audio = new Audio(filePath);
+                audio.volume = 0.6; // Adjust volume (0.0 to 1.0)
+                // Browsers often block audio until user interaction. 
+                // The game requires clicks to play, so this usually works.
+                audio.play().catch(e => console.log("Audio play error (Check file path or browser permissions):", e));
+            }
+        }
         
         // Animation Helpers
         let activeAnimation = null;
         let pourStreamMesh = null;
         let dropMesh = null;
+        
+        // Audio Context for AI Voice (TTS)
+        let audioContext;
 
         // --- INIT ---
         function init() {
@@ -182,8 +261,18 @@
             window.addEventListener('mousedown', onMouseDown, false);
             window.addEventListener('touchstart', onTouchStart, false);
             document.getElementById('reset-btn').addEventListener('click', emptyBeaker);
+            document.getElementById('suggest-btn').addEventListener('click', askForSuggestion);
+
+            // Initialize Audio Context on user interaction (Required for modern browsers)
+            window.addEventListener('click', () => {
+                if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }, { once: true });
 
             clock = new THREE.Clock();
+            
+            // Initial greeting
+            showAIBubble("Welcome to the lab! I'm Dr. Atom. Mix any metal with acid or water to see what happens!");
+            
             animate();
         }
 
@@ -201,6 +290,143 @@
             const point = new THREE.PointLight(0x3498db, 0.2);
             point.position.set(0, 5, 0);
             scene.add(point);
+        }
+
+        // --- GEMINI API INTEGRATION ---
+
+        async function generateContent(prompt) {
+            if (!apiKey) {
+                console.warn("API Key not found");
+                return "Simulated AI Response: API Key missing.";
+            }
+
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: prompt }] }]
+                    })
+                });
+
+                if (!response.ok) throw new Error('API call failed');
+                const data = await response.json();
+                return data.candidates[0].content.parts[0].text;
+            } catch (error) {
+                console.error("Gemini Error:", error);
+                return "I couldn't analyze that reaction properly right now.";
+            }
+        }
+
+        async function speakText(text) {
+            if (!apiKey || !audioContext) return;
+            if (audioContext.state === 'suspended') await audioContext.resume();
+
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: text }] }],
+                        generationConfig: {
+                            responseModalities: ["AUDIO"],
+                            speechConfig: {
+                                voiceConfig: {
+                                    prebuiltVoiceConfig: { voiceName: "Puck" }
+                                }
+                            }
+                        }
+                    })
+                });
+
+                if (!response.ok) throw new Error('TTS call failed');
+                const data = await response.json();
+                
+                if (!data.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) {
+                    console.warn("No audio data returned");
+                    return;
+                }
+
+                const audioContent = data.candidates[0].content.parts[0].inlineData.data;
+                
+                // Decode Base64
+                const binaryString = atob(audioContent);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                
+                playPCM(bytes.buffer);
+
+            } catch (error) {
+                console.warn("TTS Error:", error);
+            }
+        }
+
+        function playPCM(arrayBuffer) {
+            // Gemini TTS Defaults: 24kHz, 1 channel, 16-bit PCM
+            const sampleRate = 24000; 
+            const numChannels = 1;
+            
+            // Convert 16-bit PCM (Int16) to Float32 (-1.0 to 1.0)
+            const dataView = new DataView(arrayBuffer);
+            const numSamples = arrayBuffer.byteLength / 2;
+            const float32Data = new Float32Array(numSamples);
+            
+            for (let i = 0; i < numSamples; i++) {
+                // Little endian is standard for WAV/PCM
+                const int16 = dataView.getInt16(i * 2, true); 
+                // Normalize Int16 to Float32 range [-1.0, 1.0]
+                float32Data[i] = int16 < 0 ? int16 / 32768 : int16 / 32767;
+            }
+
+            // Create AudioBuffer
+            const audioBuffer = audioContext.createBuffer(numChannels, numSamples, sampleRate);
+            audioBuffer.copyToChannel(float32Data, 0);
+
+            // Play
+            const source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
+            source.start();
+        }
+
+        async function analyzeReaction(chemicals, type) {
+            const bubble = document.getElementById('ai-content');
+            bubble.innerHTML = "Analyzing reaction<span class='loading-dots'></span>";
+            showAIBubble(null);
+
+            let prompt = `You are a chemistry teacher explaining a reaction to a student.
+            The student mixed: ${chemicals.join(', ')}.
+            The observed result was: ${type}.
+            Provide a 1-sentence fun explanation and the balanced chemical equation.
+            Keep it very brief.`;
+
+            const text = await generateContent(prompt);
+            showAIBubble(text);
+            speakText(text); 
+        }
+
+        async function askForSuggestion() {
+            const bubble = document.getElementById('ai-content');
+            bubble.innerHTML = "Thinking<span class='loading-dots'></span>";
+            showAIBubble(null);
+
+            const inventory = "Na, K, Li, Mg, Ca, Fe, Zn, Cu, Al, Pb, H2O, HCl, H2SO4, HNO3, NaOH, KOH, Hg, CuSO4, Ethanol, NH3";
+            let prompt = `You are a lab assistant. The inventory is: ${inventory}.
+            Suggest ONE cool, specific combination for the user to try in the beaker. 
+            Mention what visual effect they will see (e.g. bubbles, explosion, color change).
+            Keep it under 20 words.`;
+
+            const text = await generateContent(prompt);
+            showAIBubble(text);
+        }
+
+        function showAIBubble(text) {
+            const bubble = document.getElementById('ai-bubble');
+            if(text) document.getElementById('ai-content').innerText = text;
+            bubble.classList.add('visible');
         }
 
         // --- ENVIRONMENT ---
@@ -356,7 +582,7 @@
         function createChemicals() {
             // Define Metals
             const metals = [
-                { name: 'Na', label: 'Na', color: 0xbdc3c7, shape: 'chunk' },
+                { name: 'Na', label: 'Na', color: 0xbdc3c7, shape: 'nail' },
                 { name: 'K', label: 'K', color: 0x95a5a6, shape: 'chunk' },
                 { name: 'Li', label: 'Li', color: 0xdcdcdc, shape: 'chunk' },
                 { name: 'Mg', label: 'Mg', color: 0xffffff, shape: 'ribbon' },
@@ -364,15 +590,15 @@
                 { name: 'Fe', label: 'Fe Nails', color: 0x5c5c5c, shape: 'nail' },
                 { name: 'Zn', label: 'Zn', color: 0xa8a8a8, shape: 'granule' },
                 { name: 'Cu', label: 'Cu', color: 0xb87333, shape: 'wire' },
-                { name: 'Al', label: 'Al Foil', color: 0xe0e0e0, shape: 'ribbon' }, // Reuse ribbon for foil strip
+                { name: 'Al', label: 'Al Foil', color: 0xe0e0e0, shape: 'ribbon' }, 
                 { name: 'Pb', label: 'Pb', color: 0x4a4a4a, shape: 'chunk' }
             ];
 
             // Define Liquids/Acids
             const liquids = [
                 { name: 'H2O', label: 'Water', color: 0x3498db, opacity: 0.4 },
-                { name: 'HCl', label: 'HCl', color: 0xffffcc, opacity: 0.3 }, // Pale yellow
-                { name: 'H2SO4', label: 'H2SO4', color: 0xffffff, opacity: 0.6, viscous: true }, // Oily
+                { name: 'HCl', label: 'HCl', color: 0xffffcc, opacity: 0.3 }, 
+                { name: 'H2SO4', label: 'H2SO4', color: 0xffffff, opacity: 0.6, viscous: true }, 
                 { name: 'HNO3', label: 'HNO3', color: 0xffeb3b, opacity: 0.4 },
                 { name: 'NaOH', label: 'NaOH', color: 0xecf0f1, opacity: 0.5 },
                 { name: 'KOH', label: 'KOH', color: 0xecf0f1, opacity: 0.5 },
@@ -563,7 +789,6 @@
                     liquidMesh.visible = true;
                     // Mix colors if liquid already exists
                     if (liquidMesh.scale.y > 0) {
-                         // Simplify: Just take new color for visual feedback
                         liquidMesh.material.color.setHex(obj.userData.def.color);
                     } else {
                         liquidMesh.material.color.setHex(obj.userData.def.color);
@@ -655,7 +880,7 @@
 
             // Group definitions
             const alkali = ['Na', 'K', 'Li'];
-            const reactive = ['Mg', 'Zn', 'Fe', 'Al', 'Ca'];
+            const reactive = ['Mg', 'Na', 'Zn', 'Fe', 'Al', 'Ca'];
             const acids = ['HCl', 'H2SO4', 'HNO3'];
             const bases = ['NaOH', 'KOH', 'NH3'];
 
@@ -668,14 +893,13 @@
             // 3. Acid + Base
             else if (contents.some(c => acids.includes(c)) && contents.some(c => bases.includes(c))) type = 'steam';
             
-            // 4. Specific: Sodium + Chlorine gas (if we had it, keeping placeholders logic)
-            // 5. Mercury just sits (Heavy liquid)
+            // 4. Mercury
             else if (has('Hg') && contents.length === 1) type = 'heavy_liquid';
 
             if (type && type !== 'heavy_liquid') {
                 const txt = document.getElementById('reaction-text');
                 let msg = "";
-                if(type === 'explosion') msg = "EXPLOSION!";
+                if(type === 'explosion') msg = "Dhamaka💥";
                 if(type === 'bubbles') msg = "H2 GAS BUBBLES";
                 if(type === 'steam') msg = "NEUTRALIZATION";
                 
@@ -683,6 +907,10 @@
                 txt.classList.add('show-text');
                 triggerEffect(type);
                 
+                // CALL GEMINI FOR ANALYSIS
+                const ingredients = [...beakerContents]; // Copy before reset
+                analyzeReaction(ingredients, type);
+
                 beakerContents = []; // Reset reaction state
                 setTimeout(() => {
                     txt.classList.remove('show-text');
@@ -703,9 +931,13 @@
             boyCharacter.mesh.rotation.x = 0;
             boyCharacter.mesh.position.copy(boyCharacter.defaultPos);
             document.getElementById('reaction-text').classList.remove('show-text');
+            showAIBubble("Beaker clean! Ready for new experiments.");
         }
 
         function triggerEffect(type) {
+            // Play the custom sound file immediately
+            playSoundEffect(type);
+
             if (type === 'explosion') {
                 boyCharacter.mesh.rotation.x = -0.5; 
                 boyCharacter.mesh.position.y = -1;
